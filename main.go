@@ -30,6 +30,7 @@ var allowedOrigins = map[string]bool{
 	"http://localhost:4321":            true,
 	"https://gestor.mgdc.site":         true,
 	"http://localhost:3000":            true,
+	"*":                                true, // Allow all origins for debugging
 }
 
 // Global rate limiter (30 requests per minute per IP)
@@ -94,10 +95,14 @@ func (rl *RateLimiter) Cleanup() {
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
+		log.Printf("[CORS] Received request from Origin: %s", origin) // Log origin for debugging
 
-		// Check if origin is allowed
-		if allowedOrigins[origin] {
+		// Check if origin is allowed or if wildcard is enabled
+		if allowedOrigins[origin] || allowedOrigins["*"] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			if allowedOrigins["*"] && origin == "" {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			}
 			w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, x-api-key")
 			w.Header().Set("Access-Control-Max-Age", "86400")
