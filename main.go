@@ -29,6 +29,7 @@ var allowedOrigins = map[string]bool{
 	"https://sinx-pomodoro.mgdc.site": true,
 	"http://localhost:4321":            true,
 	"https://gestor.mgdc.site":         true,
+	"http://localhost:3000":            true,
 }
 
 // Global rate limiter (30 requests per minute per IP)
