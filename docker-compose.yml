@@ -1,0 +1,10 @@
+services:
+  hash-service:
+    build: .
+    container_name: hash-service
+    ports:
+      - "3010:3010"
+    environment:
+      - PORT=${PORT:-3010}
+      - AUTH_KEY=${AUTH_KEY}
+    restart: unless-stopped
