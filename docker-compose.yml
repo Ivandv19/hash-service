@@ -1,10 +1,24 @@
+# Orquestación local del hash-service con Docker Compose
+
 services:
   hash-service:
+    # Construye la imagen usando el Dockerfile de este directorio
     build: .
+
+    # Nombre del contenedor (para identificarlo fácilmente con docker ps)
     container_name: hash-service
+
+    # Mapeo de puertos: host:contenedor
+    # Accesible en http://localhost:3010
     ports:
       - "3010:3010"
+
+    # Variables de entorno que el servicio necesita en tiempo de ejecución.
+    # Se leen del archivo .env (o del entorno del sistema si no hay .env)
     environment:
-      - PORT=${PORT:-3010}
-      - AUTH_KEY=${AUTH_KEY}
+      - PORT=${PORT:-3010} # Puerto del servidor (default: 3010)
+      - AUTH_KEY=${AUTH_KEY} # Llave de autenticación del servicio
+
+    # Política de reinicio: se reinicia automáticamente si se cae,
+    # pero NO si lo detienes tú manualmente (docker stop)
     restart: unless-stopped
