@@ -1,7 +1,7 @@
 # ── ETAPA 1: Builder ─────────────────────────────────────────────────────────
 # Usamos la imagen oficial de Go con Alpine (ligera). Esta imagen solo existe
 # durante la compilación, NO llega a producción.
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
