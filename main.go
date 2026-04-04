@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"mime"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,6 +76,9 @@ func NewLogger() *Logger {
 
 // Info - Registra un mensaje informativo
 func (l *Logger) Info(requestID string, msg string, fields map[string]interface{}) {
+	if fields == nil {
+		fields = map[string]interface{}{}
+	}
 	fields["timestamp"] = time.Now().Format(time.RFC3339)
 	fields["level"] = "INFO"
 	fields["request_id"] = requestID
@@ -83,6 +89,9 @@ func (l *Logger) Info(requestID string, msg string, fields map[string]interface{
 
 // Error - Registra un mensaje de error
 func (l *Logger) Error(requestID string, msg string, err error, fields map[string]interface{}) {
+	if fields == nil {
+		fields = map[string]interface{}{}
+	}
 	fields["timestamp"] = time.Now().Format(time.RFC3339)
 	fields["level"] = "ERROR"
 	fields["request_id"] = requestID
@@ -96,6 +105,9 @@ func (l *Logger) Error(requestID string, msg string, err error, fields map[strin
 
 // Warn - Registra un mensaje de advertencia
 func (l *Logger) Warn(requestID string, msg string, fields map[string]interface{}) {
+	if fields == nil {
+		fields = map[string]interface{}{}
+	}
 	fields["timestamp"] = time.Now().Format(time.RFC3339)
 	fields["level"] = "WARN"
 	fields["request_id"] = requestID
@@ -200,6 +212,30 @@ func getKeys(m map[string]string) []string {
 	return keys
 }
 
+// isJSONContentType valida application/json con o sin parametros (charset, etc.)
+func isJSONContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(mediaType, "application/json")
+}
+
+// extractClientIP obtiene la IP real del cliente considerando proxies.
+func extractClientIP(r *http.Request) string {
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		return strings.TrimSpace(parts[0])
+	}
+
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return ip
+	}
+
+	return r.RemoteAddr
+}
+
 // ==================== MIDDLEWARES ====================
 
 // requestIDMiddleware - Añade un ID único a cada petición
@@ -210,6 +246,7 @@ func requestIDMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if requestID == "" {
 			requestID = uuid.New().String()
 		}
+		clientIP := extractClientIP(r)
 		
 		// Añadir a los headers de respuesta
 		w.Header().Set("X-Request-ID", requestID)
@@ -218,7 +255,7 @@ func requestIDMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		appLogger.Info(requestID, "Petición recibida", map[string]interface{}{
 			"method":     r.Method,
 			"path":       r.URL.Path,
-			"ip":         r.RemoteAddr,
+			"ip":         clientIP,
 			"user_agent": r.UserAgent(),
 			"origin":     r.Header.Get("Origin"),
 		})
@@ -258,11 +295,12 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+
 // rateLimitMiddleware - Controla el límite de peticiones por IP
 func rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get("X-Request-ID")
-		ip := r.RemoteAddr
+		ip := extractClientIP(r)
 		
 		if !limiter.Allow(ip) {
 			appLogger.Warn(requestID, "Límite de peticiones excedido", map[string]interface{}{
@@ -280,11 +318,12 @@ func authMiddleware(authKey string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get("X-Request-ID")
 		providedKey := r.Header.Get("x-api-key")
+		ip := extractClientIP(r)
 		
 		// Comparación en tiempo constante
 		if !secureCompare(providedKey, authKey) {
 			appLogger.Warn(requestID, "Petición no autorizada", map[string]interface{}{
-				"ip": r.RemoteAddr,
+				"ip": ip,
 			})
 			sendJSONError(w, "No autorizado", http.StatusUnauthorized)
 			return
@@ -309,7 +348,7 @@ func hashHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validar Content-Type
-	if r.Header.Get("Content-Type") != "application/json" {
+	if !isJSONContentType(r.Header.Get("Content-Type")) {
 		appLogger.Warn(requestID, "Content-Type incorrecto", map[string]interface{}{
 			"content_type": r.Header.Get("Content-Type"),
 		})
@@ -351,13 +390,9 @@ func hashHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Medir tiempo de procesamiento
 	startTime := time.Now()
-	
-	// Crear hash con Argon2id
 	hash, err := argon2id.CreateHash(password, argon2id.DefaultParams)
 	duration := time.Since(startTime)
-
 	if err != nil {
 		appLogger.Error(requestID, "Error creando hash", err, map[string]interface{}{
 			"duration_ms": duration.Milliseconds(),
@@ -366,13 +401,11 @@ func hashHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Registrar éxito
 	appLogger.Info(requestID, "Hash creado exitosamente", map[string]interface{}{
 		"duration_ms": duration.Milliseconds(),
-		"ip":          r.RemoteAddr,
+		"ip":          extractClientIP(r),
 	})
 
-	// Enviar respuesta
 	sendJSONSuccess(w, map[string]string{"hash": hash}, http.StatusOK)
 }
 
@@ -388,9 +421,9 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
 		sendJSONError(w, "Método no permitido. Usa POST", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	// Validar Content-Type
-	if r.Header.Get("Content-Type") != "application/json" {
+	if !isJSONContentType(r.Header.Get("Content-Type")) {
 		appLogger.Warn(requestID, "Content-Type incorrecto", map[string]interface{}{
 			"content_type": r.Header.Get("Content-Type"),
 		})
@@ -431,7 +464,6 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validación básica del formato del hash
 	if len(hash) < 10 {
 		appLogger.Warn(requestID, "Formato de hash inválido (muy corto)", map[string]interface{}{
 			"hash_length": len(hash),
@@ -440,13 +472,9 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Medir tiempo de procesamiento
 	startTime := time.Now()
-	
-	// Verificar contraseña contra el hash
 	match, err := argon2id.ComparePasswordAndHash(password, hash)
 	duration := time.Since(startTime)
-
 	if err != nil {
 		appLogger.Error(requestID, "Error verificando hash", err, map[string]interface{}{
 			"duration_ms": duration.Milliseconds(),
@@ -455,14 +483,12 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Registrar resultado
 	appLogger.Info(requestID, "Verificación completada", map[string]interface{}{
 		"duration_ms": duration.Milliseconds(),
-		"ip":          r.RemoteAddr,
+		"ip":          extractClientIP(r),
 		"match":       match,
 	})
 
-	// Enviar respuesta
 	sendJSONSuccess(w, map[string]bool{"match": match}, http.StatusOK)
 }
 
@@ -477,7 +503,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"timestamp": time.Now().Format(time.RFC3339),
 		"version":   "1.0.0",
 	})
-	
+
 	appLogger.Info(requestID, "Health check", map[string]interface{}{
 		"status": "saludable",
 	})
@@ -508,12 +534,12 @@ func main() {
 		corsMiddleware(
 			rateLimitMiddleware(
 				authMiddleware(authKey, hashHandler)))))
-	
+
 	http.HandleFunc("/verify", requestIDMiddleware(
 		corsMiddleware(
 			rateLimitMiddleware(
 				authMiddleware(authKey, verifyHandler)))))
-	
+
 	http.HandleFunc("/health", requestIDMiddleware(healthHandler))
 
 	// Registrar inicio del servicio
